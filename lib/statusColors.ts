@@ -24,6 +24,20 @@ export const STATUS_PRECEDENCE: AggregateStatus[] = [
   "unknown",
 ];
 
+/** The OCPP connector statuses that mean a session is under way — the same `IN_SESSION` set
+ * api/queries.py uses to call a site `occupied`. */
+const IN_SESSION = new Set(["Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"]);
+
+/** The colour for one connector's OCPP status (e.g. "Charging"), on the same palette as the
+ * pins, so a connector and its site read the same way (11-demo-fleet.md §G.3). */
+export function connectorStatusColor(status: string): string {
+  if (status === "Available") return STATUS_COLORS.available;
+  if (IN_SESSION.has(status)) return STATUS_COLORS.occupied;
+  if (status === "Reserved") return STATUS_COLORS.reserved;
+  if (status === "Faulted") return STATUS_COLORS.faulted;
+  return STATUS_COLORS.unavailable;
+}
+
 /** A MapLibre `match` expression on the `aggregate_status` feature property, for use as a
  * `circle-color` (or equivalent) paint property — data-driven styling, not per-marker JS. */
 export function statusColorExpression(property = "aggregate_status"): ExpressionSpecification {

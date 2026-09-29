@@ -5,7 +5,8 @@
  */
 
 export type SiteType = "gas_station" | "hotel" | "parking" | "other" | "standalone";
-export type SiteSource = "operator" | "external_reference";
+/** `simulated` is a demo site (11-demo-fleet.md): live exactly like `operator`. */
+export type SiteSource = "operator" | "external_reference" | "simulated";
 export type AggregateStatus =
   | "available"
   | "occupied"
@@ -30,6 +31,10 @@ export interface ConnectorOut {
   connector_id: number;
   status: string;
   error_code: string;
+  /** The hardware, when described: plug (e.g. "CCS2"), "AC"/"DC", rated kW. */
+  connector_type: string | null;
+  power_type: string | null;
+  max_power_kw: number | null;
 }
 
 export interface ChargePointInSite {

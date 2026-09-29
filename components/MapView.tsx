@@ -6,6 +6,7 @@ import { config as maptilerConfig, Map as MaptilerMap, MapStyle } from "@maptile
 import type { GeoJSONSource, MapGeoJSONFeature, MapMouseEvent } from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 
+import { listSites } from "@/lib/api";
 import { statusColorExpression } from "@/lib/statusColors";
 import type { SiteSummary } from "@/lib/types";
 
@@ -16,6 +17,9 @@ const SITES_SOURCE_ID = "sites";
 const CLUSTER_LAYER_ID = "sites-clusters";
 const CLUSTER_COUNT_LAYER_ID = "sites-cluster-count";
 const UNCLUSTERED_LAYER_ID = "sites-unclustered";
+
+// 11-demo-fleet.md §G.4: how often pins re-fetch their colour while the tab is visible.
+const PIN_REFRESH_MS = 10_000;
 
 // 10-frontend-nextjs.md §F.1 — approximate, verify Montenegro's real extent before shipping.
 const MONTENEGRO_CENTER: [number, number] = [19.3, 42.7];
@@ -63,6 +67,10 @@ export default function MapView({ initialSites }: { initialSites: SiteSummary[] 
       throw new Error("NEXT_PUBLIC_MAPTILER_API_KEY is not set");
     }
     maptilerConfig.apiKey = apiKey;
+
+    // Pins keep their page-load colour unless something refreshes them; see the load handler.
+    let refreshTimer: ReturnType<typeof setInterval> | undefined;
+    let disposed = false;
 
     const map = new MaptilerMap({
       container: containerRef.current,
@@ -189,10 +197,30 @@ export default function MapView({ initialSites }: { initialSites: SiteSummary[] 
         }
       });
 
+      // Re-fetch every pin's aggregate_status and swap it into the source in place (10 §F.2's
+      // setData), so colours follow the chargers without a reload. Skipped while the tab is
+      // hidden; a failed fetch keeps the pins as they are until the next tick.
+      refreshTimer = setInterval(() => {
+        if (document.visibilityState !== "visible") {
+          return;
+        }
+        listSites()
+          .then((sites) => {
+            if (disposed) return;
+            const source = map.getSource(SITES_SOURCE_ID) as GeoJSONSource | undefined;
+            source?.setData(toFeatureCollection(sites));
+          })
+          .catch(() => {
+            // Keep the old data silently; the next tick tries again.
+          });
+      }, PIN_REFRESH_MS);
+
       setMapInstance(map);
     });
 
     return () => {
+      disposed = true;
+      clearInterval(refreshTimer);
       map.remove();
       mapRef.current = null;
       setMapInstance(null);

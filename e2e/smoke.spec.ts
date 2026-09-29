@@ -87,7 +87,8 @@ test("clicking an individual pin opens the panel with a live status", async ({ p
 
   await page.mouse.click(pin.x, pin.y);
   await expect(page.getByRole("button", { name: "Close" })).toBeVisible({ timeout: 5000 });
+  // .first(): a live site lists every connector of every charger, so several statuses show.
   await expect(
-    page.getByText(/preparing|charging|finishing|available|unavailable|unknown/i),
+    page.getByText(/preparing|charging|finishing|available|unavailable|unknown/i).first(),
   ).toBeVisible();
 });

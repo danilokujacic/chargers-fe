@@ -6,12 +6,19 @@ import type { ConnectorOut, LiveEvent } from "./types";
 
 /** One connector's live-merged view: REST's last-known status, overwritten by whatever a
  * `connector_status` event says next, plus the transaction currently open on it (if any). */
-export interface LiveConnectorState extends ConnectorOut {
+export interface LiveConnectorState
+  extends Pick<ConnectorOut, "connector_id" | "status" | "error_code"> {
   transaction_id: number | null;
   latest_meter_value: number | null;
 }
 
-export type LiveConnectorsState = Record<number, LiveConnectorState>;
+/** Keyed by `liveKey(identity, connectorId)`: every charger at a site has its own connector 1,
+ * so a connector id alone is not unique within a site (11-demo-fleet.md §G.2). */
+export type LiveConnectorsState = Record<string, LiveConnectorState>;
+
+export function liveKey(chargePointIdentity: string, connectorId: number): string {
+  return `${chargePointIdentity}:${connectorId}`;
+}
 
 function wsBaseUrl(): string {
   const url = process.env.NEXT_PUBLIC_WS_BASE_URL;
@@ -23,7 +30,8 @@ function wsBaseUrl(): string {
 
 function applyEvent(state: LiveConnectorsState, event: LiveEvent): LiveConnectorsState {
   const connectorId = event.connector_id;
-  const existing = state[connectorId] ?? {
+  const key = liveKey(event.charge_point_identity, connectorId);
+  const existing = state[key] ?? {
     connector_id: connectorId,
     status: "Unavailable",
     error_code: "NoError",
@@ -35,7 +43,7 @@ function applyEvent(state: LiveConnectorsState, event: LiveEvent): LiveConnector
     case "connector_status":
       return {
         ...state,
-        [connectorId]: {
+        [key]: {
           ...existing,
           status: event.data.status,
           error_code: event.data.error_code,
@@ -44,19 +52,19 @@ function applyEvent(state: LiveConnectorsState, event: LiveEvent): LiveConnector
     case "transaction_started":
       return {
         ...state,
-        [connectorId]: { ...existing, transaction_id: event.data.transaction_id },
+        [key]: { ...existing, transaction_id: event.data.transaction_id },
       };
     case "transaction_stopped":
       return {
         ...state,
-        [connectorId]: { ...existing, transaction_id: null, latest_meter_value: null },
+        [key]: { ...existing, transaction_id: null, latest_meter_value: null },
       };
     case "meter_value": {
       const reading = event.data.meter_value as { value?: string | number } | null;
       const value = reading && "value" in reading ? Number(reading.value) : null;
       return {
         ...state,
-        [connectorId]: {
+        [key]: {
           ...existing,
           latest_meter_value: Number.isFinite(value) ? (value as number) : existing.latest_meter_value,
         },
@@ -71,8 +79,9 @@ function applyEvent(state: LiveConnectorsState, event: LiveEvent): LiveConnector
 }
 
 /** Opens `WS /api/v1/ws/sites/{siteId}` (08 §G) for the lifetime of `siteId`, merging every
- * incoming event into per-connector state keyed by `connector_id` (10 §E, point 3). Cleans up
- * the socket both on unmount and whenever `siteId` changes — never leaves a stale socket open. */
+ * incoming event into per-connector state keyed by charger and connector (10 §E point 3, as
+ * corrected by 11 §G.2). Cleans up the socket both on unmount and whenever `siteId` changes —
+ * never leaves a stale socket open. */
 export function useStationLiveStatus(siteId: string | null) {
   const [trackedSiteId, setTrackedSiteId] = useState(siteId);
   const [live, setLive] = useState<LiveConnectorsState>({});
@@ -97,8 +106,12 @@ export function useStationLiveStatus(siteId: string | null) {
     socket.addEventListener("close", () => setConnected(false));
     socket.addEventListener("message", (message) => {
       try {
-        const event = JSON.parse(message.data) as LiveEvent;
-        setLive((prev) => applyEvent(prev, event));
+        const frame = JSON.parse(message.data) as Partial<LiveEvent>;
+        // The first frame is 08 §G's SiteDetail snapshot, not an event: it has no `type`.
+        if (!frame || typeof frame.type !== "string") {
+          return;
+        }
+        setLive((prev) => applyEvent(prev, frame as LiveEvent));
       } catch {
         // Malformed frame: ignore it, the next one will still arrive.
       }
