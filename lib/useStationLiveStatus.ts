@@ -28,6 +28,28 @@ function wsBaseUrl(): string {
   return url;
 }
 
+interface SampledValue {
+  value?: string;
+  measurand?: string;
+}
+
+/** The energy reading (Wh) in a `meter_value` event's MeterValue — `{timestamp, sampled_value:
+ * [{value, measurand, unit}, …]}` as main.py publishes it — preferring the energy register, as
+ * api/queries.py's _latest_reading does. Null when there is no usable number. */
+function energyReading(meterValue: unknown): number | null {
+  const samples = (meterValue as { sampled_value?: SampledValue[] } | null)?.sampled_value ?? [];
+  const preferred = samples.filter(
+    (s) => s.measurand === undefined || s.measurand === "Energy.Active.Import.Register",
+  );
+  for (const sample of preferred.length > 0 ? preferred : samples) {
+    const value = Number(sample.value);
+    if (sample.value !== undefined && Number.isFinite(value)) {
+      return Math.trunc(value);
+    }
+  }
+  return null;
+}
+
 function applyEvent(state: LiveConnectorsState, event: LiveEvent): LiveConnectorsState {
   const connectorId = event.connector_id;
   const key = liveKey(event.charge_point_identity, connectorId);
@@ -60,13 +82,14 @@ function applyEvent(state: LiveConnectorsState, event: LiveEvent): LiveConnector
         [key]: { ...existing, transaction_id: null, latest_meter_value: null },
       };
     case "meter_value": {
-      const reading = event.data.meter_value as { value?: string | number } | null;
-      const value = reading && "value" in reading ? Number(reading.value) : null;
+      const value = energyReading(event.data.meter_value);
       return {
         ...state,
         [key]: {
           ...existing,
-          latest_meter_value: Number.isFinite(value) ? (value as number) : existing.latest_meter_value,
+          // A panel opened mid-session learns the session from its first reading.
+          transaction_id: existing.transaction_id ?? event.data.transaction_id,
+          latest_meter_value: value ?? existing.latest_meter_value,
         },
       };
     }
